@@ -1,0 +1,74 @@
+
+# Version controls
+.git/
+.github/
+
+# Python bytecode files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Secrets
+database.db
+keys.py
+temp/
+*.ini
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Virtual environment directory
+venv/
+env/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Flask specific files
+instance/
+
+# Logs
+logs/
+*.log
+*.out
+*.err
+
+# Caches
+*.cache
+*.pytest_cache/
+*.coverage
+.coverage.*
+
+# Compiled dependencies
+*.egg-info/
+*.egg
+*.dist-info
+
+# PyInstaller
+dist/
+build/
+*.spec
+
+# Generated files
+pip-log.txt
+pip-delete-this-directory.txt
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Deployment
+*.bak
+*.orig
+
+# Automation
+makefile
+Makefile
+
