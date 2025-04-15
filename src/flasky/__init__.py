@@ -11,6 +11,7 @@ import logging
 from os.path import join
 from src.flasky.errors import app_error
 from .utils import root_path, metrics, jwt, oauth, limiter
+from .routes import api
 
 
 class CustomLogger(logging.Logger):
@@ -113,6 +114,7 @@ def create_app():
     app.register_blueprint(app_session)
     app.register_blueprint(app_fetch)
     app.register_blueprint(app_error)
+    app.register_blueprint(api)
 
     # Configure OAuth
     oauth.init_app(app)

@@ -10,6 +10,7 @@ from src.dbModels.SchemaModels import (
 )
 from src.dbModels.BaseModel import Base
 from src.utils.pre_loader import config
+from .models import *
 
 # Corrected SQLite URL for a relative path
 _engine = create_engine(
