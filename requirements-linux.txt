@@ -10,3 +10,4 @@ requests
 prometheus-flask-exporter
 Flask-Limiter
 limits[valkey]
+marshmallow
