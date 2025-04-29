@@ -4,13 +4,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
 
-from src.dbModels.SchemaModels import (
-    User, College, Event, Sponsorship, Achievement, Match,
-    GameCategory, Participant, Team, Schedule, Venue, Certificate
-)
 from src.dbModels.BaseModel import Base
 from src.utils.pre_loader import config
-from .models import *
+from .models  import *
 
 # Corrected SQLite URL for a relative path
 _engine = create_engine(

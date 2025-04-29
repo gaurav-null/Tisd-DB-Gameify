@@ -5,7 +5,6 @@ from sqlalchemy import func
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 from src.dbModels.models import (
-    db,
     User,
     UserRole,
     College,
@@ -24,34 +23,19 @@ from src.dbModels.models import (
     Venue,
     Certificate,
 )
-from src.dbModels.SchemaModels import (
-    UserSchema,
-    CollegeSchema,
-    EventSchema,
-    MatchSchema,
-    TeamSchema,
-    ParticipantSchema,
-)
 from marshmallow import ValidationError
 import uuid
+from src.dbModels import dbSession
+session = dbSession()
 
 api = Blueprint("api", __name__)
-
-# Initialize schemas
-user_schema = UserSchema()
-college_schema = CollegeSchema()
-event_schema = EventSchema()
-match_schema = MatchSchema()
-team_schema = TeamSchema()
-participant_schema = ParticipantSchema()
-
 
 # Helper functions
 def is_time_restricted(college_id, check_time):
     day_of_week = check_time.weekday()
     time_of_day = check_time.time()
 
-    restricted_day = RestrictedDay.query.filter_by(
+    restricted_day = session.query(RestrictedDay).filter_by(
         college_id=college_id, day_of_week=day_of_week, is_restricted=True
     ).first()
 
@@ -65,32 +49,30 @@ def is_time_restricted(college_id, check_time):
 
     return True
 
-
 # Auth Routes
 @api.route("/register", methods=["POST"])
 def register():
     data = request.get_json()
 
-    try:
-        user_data = user_schema.load(data)
-    except ValidationError as err:
-        return jsonify(err.messages), 400
+    required_fields = ["name", "email", "password", "college_id"]
+    if not all(field in data for field in required_fields):
+        return jsonify({"message": "Missing required fields"}), 400
 
-    if User.query.filter_by(email=user_data["email"]).first():
+    if session.query(User).filter_by(email=data["email"]).first():
         return jsonify({"message": "Email already registered"}), 400
 
-    hashed_password = generate_password_hash(user_data["password"])
+    hashed_password = generate_password_hash(data["password"])
     new_user = User(
         id=str(uuid.uuid4()),
-        name=user_data["name"],
-        email=user_data["email"],
+        name=data["name"],
+        email=data["email"],
         password_hash=hashed_password,
-        role=user_data.get("role", UserRole.STUDENT),
-        college_id=user_data["college_id"],
+        role=data.get("role", UserRole.STUDENT),
+        college_id=data["college_id"],
     )
 
-    db.session.add(new_user)
-    db.session.commit()
+    session.add(new_user)
+    session.commit()
 
     return jsonify({"message": "User created successfully"}), 201
 
@@ -101,7 +83,7 @@ def login():
     email = data.get("email")
     password = data.get("password")
 
-    user = User.query.filter_by(email=email).first()
+    user = session.query(User).filter_by(email=email).first()
 
     if not user or not check_password_hash(user.password_hash, password):
         return jsonify({"message": "Invalid credentials"}), 401
@@ -115,42 +97,45 @@ def login():
 @jwt_required()
 def get_user(user_id):
     current_user_id = get_jwt_identity()
-    user = User.query.get_or_404(user_id)
+    user = session.query(User).get(user_id)
+    if not user:
+        return jsonify({"message": "User not found"}), 404
 
-    if (
-        current_user_id != user_id
-        and User.query.get(current_user_id).role != UserRole.ADMIN
-    ):
+    if (current_user_id != user_id and 
+        session.query(User).get(current_user_id).role != UserRole.ADMIN):
         return jsonify({"message": "Unauthorized"}), 403
 
-    return user_schema.jsonify(user), 200
+    return jsonify({
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "role": user.role.value,
+        "college_id": user.college_id,
+        "skill_level": user.skill_level,
+        "is_active": user.is_active
+    }), 200
 
 
 @api.route("/users/<user_id>", methods=["PUT"])
 @jwt_required()
 def update_user(user_id):
     current_user_id = get_jwt_identity()
-    user = User.query.get_or_404(user_id)
+    user = session.query(User).get(user_id)
+    if not user:
+        return jsonify({"message": "User not found"}), 404
 
-    if (
-        current_user_id != user_id
-        and User.query.get(current_user_id).role != UserRole.ADMIN
-    ):
+    if (current_user_id != user_id and 
+        session.query(User).get(current_user_id).role != UserRole.ADMIN):
         return jsonify({"message": "Unauthorized"}), 403
 
     data = request.get_json()
-    try:
-        user_data = user_schema.load(data, partial=True)
-    except ValidationError as err:
-        return jsonify(err.messages), 400
-
-    for key, value in user_data.items():
+    for key, value in data.items():
         if key == "password":
             user.password_hash = generate_password_hash(value)
-        else:
+        elif hasattr(user, key):
             setattr(user, key, value)
 
-    db.session.commit()
+    session.commit()
     return jsonify({"message": "User updated successfully"}), 200
 
 
@@ -158,25 +143,24 @@ def update_user(user_id):
 @api.route("/colleges", methods=["POST"])
 @jwt_required()
 def create_college():
-    current_user = User.query.get(get_jwt_identity())
+    current_user = session.query(User).get(get_jwt_identity())
     if current_user.role != UserRole.ADMIN:
         return jsonify({"message": "Unauthorized"}), 403
 
     data = request.get_json()
-    try:
-        college_data = college_schema.load(data)
-    except ValidationError as err:
-        return jsonify(err.messages), 400
+    required_fields = ["name", "location", "contact_email"]
+    if not all(field in data for field in required_fields):
+        return jsonify({"message": "Missing required fields"}), 400
 
     new_college = College(
         id=str(uuid.uuid4()),
-        name=college_data["name"],
-        location=college_data["location"],
-        contact_email=college_data["contact_email"],
+        name=data["name"],
+        location=data["location"],
+        contact_email=data["contact_email"],
     )
 
-    db.session.add(new_college)
-    db.session.commit()
+    session.add(new_college)
+    session.commit()
 
     return jsonify({"message": "College created successfully"}), 201
 
@@ -184,7 +168,7 @@ def create_college():
 @api.route("/colleges/<college_id>/restricted-days", methods=["POST"])
 @jwt_required()
 def add_restricted_day(college_id):
-    current_user = User.query.get(get_jwt_identity())
+    current_user = session.query(User).get(get_jwt_identity())
     if current_user.role != UserRole.ADMIN or current_user.college_id != college_id:
         return jsonify({"message": "Unauthorized"}), 403
 
@@ -202,8 +186,8 @@ def add_restricted_day(college_id):
         restricted_end_time=data.get("restricted_end_time"),
     )
 
-    db.session.add(restricted_day)
-    db.session.commit()
+    session.add(restricted_day)
+    session.commit()
 
     return jsonify({"message": "Restricted day added successfully"}), 201
 
@@ -212,17 +196,18 @@ def add_restricted_day(college_id):
 @api.route("/events", methods=["POST"])
 @jwt_required()
 def create_event():
-    current_user = User.query.get(get_jwt_identity())
+    current_user = session.query(User).get(get_jwt_identity())
     data = request.get_json()
 
-    try:
-        event_data = event_schema.load(data)
-    except ValidationError as err:
-        return jsonify(err.messages), 400
+    required_fields = ["name", "start_date", "end_date"]
+    if not all(field in data for field in required_fields):
+        return jsonify({"message": "Missing required fields"}), 400
 
-    # Check if event times are during restricted hours
-    start_time = datetime.fromisoformat(event_data["start_date"])
-    end_time = datetime.fromisoformat(event_data["end_date"])
+    try:
+        start_time = datetime.fromisoformat(data["start_date"])
+        end_time = datetime.fromisoformat(data["end_date"])
+    except ValueError:
+        return jsonify({"message": "Invalid date format"}), 400
 
     if is_time_restricted(current_user.college_id, start_time) or is_time_restricted(
         current_user.college_id, end_time
@@ -236,40 +221,48 @@ def create_event():
 
     new_event = Event(
         id=str(uuid.uuid4()),
-        name=event_data["name"],
+        name=data["name"],
         organizer_id=current_user.id,
-        description=event_data.get("description"),
+        description=data.get("description"),
         start_date=start_time,
         end_date=end_time,
-        status=event_data.get("status", EventStatus.PLANNING),
-        max_participants=event_data.get("max_participants"),
+        status=data.get("status", EventStatus.PLANNING),
+        max_participants=data.get("max_participants"),
         registration_deadline=(
-            datetime.fromisoformat(event_data.get("registration_deadline"))
-            if event_data.get("registration_deadline")
+            datetime.fromisoformat(data["registration_deadline"])
+            if data.get("registration_deadline")
             else None
         ),
     )
 
-    db.session.add(new_event)
-    db.session.commit()
+    session.add(new_event)
+    session.commit()
 
-    return event_schema.jsonify(new_event), 201
+    return jsonify({
+        "id": new_event.id,
+        "name": new_event.name,
+        "status": new_event.status.value,
+        "start_date": new_event.start_date.isoformat(),
+        "end_date": new_event.end_date.isoformat()
+    }), 201
 
 
 # Match Routes
 @api.route("/matches", methods=["POST"])
 @jwt_required()
 def create_match():
-    current_user = User.query.get(get_jwt_identity())
+    current_user = session.query(User).get(get_jwt_identity())
     data = request.get_json()
 
-    try:
-        match_data = match_schema.load(data)
-    except ValidationError as err:
-        return jsonify(err.messages), 400
+    required_fields = ["game_category_id", "scheduled_time"]
+    if not all(field in data for field in required_fields):
+        return jsonify({"message": "Missing required fields"}), 400
 
-    # Check if match time is during restricted hours
-    scheduled_time = datetime.fromisoformat(match_data["scheduled_time"])
+    try:
+        scheduled_time = datetime.fromisoformat(data["scheduled_time"])
+    except ValueError:
+        return jsonify({"message": "Invalid date format"}), 400
+
     if is_time_restricted(current_user.college_id, scheduled_time):
         return (
             jsonify(
@@ -280,33 +273,39 @@ def create_match():
 
     new_match = Match(
         id=str(uuid.uuid4()),
-        game_category_id=match_data["game_category_id"],
+        game_category_id=data["game_category_id"],
         scheduled_time=scheduled_time,
-        status=match_data.get("status", MatchStatus.SCHEDULED),
-        min_players=match_data.get("min_players", 2),
-        max_players=match_data.get("max_players", 10),
-        skill_level_range=match_data.get("skill_level_range", 1),
+        status=data.get("status", MatchStatus.SCHEDULED),
+        min_players=data.get("min_players", 2),
+        max_players=data.get("max_players", 10),
+        skill_level_range=data.get("skill_level_range", 1),
     )
 
-    db.session.add(new_match)
-    db.session.commit()
+    session.add(new_match)
+    session.commit()
 
-    return match_schema.jsonify(new_match), 201
+    return jsonify({
+        "id": new_match.id,
+        "status": new_match.status.value,
+        "scheduled_time": new_match.scheduled_time.isoformat()
+    }), 201
 
 
 @api.route("/matches/<match_id>/register", methods=["POST"])
 @jwt_required()
 def register_for_match(match_id):
     current_user_id = get_jwt_identity()
-    match = Match.query.get_or_404(match_id)
+    match = session.query(Match).get(match_id)
+    if not match:
+        return jsonify({"message": "Match not found"}), 404
 
     # Check if match is already full
-    participants_count = Participant.query.filter_by(match_id=match_id).count()
+    participants_count = session.query(Participant).filter_by(match_id=match_id).count()
     if participants_count >= match.max_players:
         return jsonify({"message": "Match is already full"}), 400
 
     # Check if user is already registered
-    existing_participation = Participant.query.filter_by(
+    existing_participation = session.query(Participant).filter_by(
         user_id=current_user_id, match_id=match_id
     ).first()
 
@@ -314,11 +313,11 @@ def register_for_match(match_id):
         return jsonify({"message": "Already registered for this match"}), 400
 
     # Check skill level compatibility for matchmaking
-    current_user = User.query.get(current_user_id)
+    current_user = session.query(User).get(current_user_id)
     if match.skill_level_range > 0:
         # Get average skill level of current participants
         avg_skill = (
-            db.session.query(func.avg(User.skill_level))
+            session.query(func.avg(User.skill_level))
             .join(Participant)
             .filter(Participant.match_id == match_id)
             .scalar()
@@ -342,10 +341,14 @@ def register_for_match(match_id):
         is_confirmed=True,
     )
 
-    db.session.add(new_participant)
-    db.session.commit()
+    session.add(new_participant)
+    session.commit()
 
-    return participant_schema.jsonify(new_participant), 201
+    return jsonify({
+        "user_id": new_participant.user_id,
+        "match_id": new_participant.match_id,
+        "is_confirmed": new_participant.is_confirmed
+    }), 201
 
 
 # Team Routes
@@ -355,43 +358,45 @@ def create_team():
     current_user_id = get_jwt_identity()
     data = request.get_json()
 
-    try:
-        team_data = team_schema.load(data)
-    except ValidationError as err:
-        return jsonify(err.messages), 400
+    required_fields = ["name"]
+    if not all(field in data for field in required_fields):
+        return jsonify({"message": "Missing required fields"}), 400
 
     new_team = Team(
         id=str(uuid.uuid4()),
-        name=team_data["name"],
-        skill_level=team_data.get("skill_level", 1),
+        name=data["name"],
+        skill_level=data.get("skill_level", 1),
         captain_id=current_user_id,
     )
 
-    db.session.add(new_team)
-    db.session.commit()
+    session.add(new_team)
+    session.commit()
 
-    return team_schema.jsonify(new_team), 201
+    return jsonify({
+        "id": new_team.id,
+        "name": new_team.name,
+        "skill_level": new_team.skill_level
+    }), 201
 
 
 @api.route("/teams/<team_id>/join", methods=["POST"])
 @jwt_required()
 def join_team(team_id):
     current_user_id = get_jwt_identity()
-    team = Team.query.get_or_404(team_id)
+    team = session.query(Team).get(team_id)
+    if not team:
+        return jsonify({"message": "Team not found"}), 404
 
     # Check if user is already in the team
-    existing_membership = Participant.query.filter_by(
+    existing_membership = session.query(Participant).filter_by(
         user_id=current_user_id, team_id=team_id
     ).first()
 
     if existing_membership:
         return jsonify({"message": "Already a member of this team"}), 400
 
-    # In a real app, you'd probably have a team invitation system
-    # For simplicity, we'll just add the user to the team
-
     # Find a match where the team is participating
-    match = Match.query.join(Participant).filter(Participant.team_id == team_id).first()
+    match = session.query(Match).join(Participant).filter(Participant.team_id == team_id).first()
 
     if not match:
         return jsonify({"message": "Team is not registered for any matches"}), 400
@@ -404,8 +409,8 @@ def join_team(team_id):
         is_confirmed=True,
     )
 
-    db.session.add(new_participant)
-    db.session.commit()
+    session.add(new_participant)
+    session.commit()
 
     return jsonify({"message": "Joined team successfully"}), 201
 
@@ -414,7 +419,7 @@ def join_team(team_id):
 @api.route("/venues", methods=["POST"])
 @jwt_required()
 def create_venue():
-    current_user = User.query.get(get_jwt_identity())
+    current_user = session.query(User).get(get_jwt_identity())
     if current_user.role != UserRole.ADMIN:
         return jsonify({"message": "Unauthorized"}), 403
 
@@ -431,8 +436,8 @@ def create_venue():
         college_id=current_user.college_id,
     )
 
-    db.session.add(new_venue)
-    db.session.commit()
+    session.add(new_venue)
+    session.commit()
 
     return jsonify({"message": "Venue created successfully"}), 201
 
@@ -440,7 +445,7 @@ def create_venue():
 @api.route("/equipment", methods=["POST"])
 @jwt_required()
 def add_equipment():
-    current_user = User.query.get(get_jwt_identity())
+    current_user = session.query(User).get(get_jwt_identity())
     if current_user.role != UserRole.ADMIN:
         return jsonify({"message": "Unauthorized"}), 403
 
@@ -457,8 +462,8 @@ def add_equipment():
         college_id=current_user.college_id,
     )
 
-    db.session.add(new_equipment)
-    db.session.commit()
+    session.add(new_equipment)
+    session.commit()
 
     return jsonify({"message": "Equipment added successfully"}), 201
 
@@ -467,7 +472,7 @@ def add_equipment():
 @api.route("/schedules", methods=["POST"])
 @jwt_required()
 def create_schedule():
-    current_user = User.query.get(get_jwt_identity())
+    current_user = session.query(User).get(get_jwt_identity())
     if current_user.role != UserRole.ADMIN:
         return jsonify({"message": "Unauthorized"}), 403
 
@@ -477,15 +482,18 @@ def create_schedule():
         return jsonify({"message": "Missing required fields"}), 400
 
     # Check venue availability
-    venue = Venue.query.get(data["venue_id"])
+    venue = session.query(Venue).get(data["venue_id"])
     if not venue or not venue.is_available:
         return jsonify({"message": "Venue not available"}), 400
 
     # Check for scheduling conflicts
-    start_time = datetime.fromisoformat(data["start_time"])
-    end_time = datetime.fromisoformat(data["end_time"])
+    try:
+        start_time = datetime.fromisoformat(data["start_time"])
+        end_time = datetime.fromisoformat(data["end_time"])
+    except ValueError:
+        return jsonify({"message": "Invalid date format"}), 400
 
-    conflicting_schedules = Schedule.query.filter(
+    conflicting_schedules = session.query(Schedule).filter(
         Schedule.venue_id == data["venue_id"],
         Schedule.start_time < end_time,
         Schedule.end_time > start_time,
@@ -503,7 +511,7 @@ def create_schedule():
         equipment_needed=data.get("equipment_needed"),
     )
 
-    db.session.add(new_schedule)
-    db.session.commit()
+    session.add(new_schedule)
+    session.commit()
 
     return jsonify({"message": "Schedule created successfully"}), 201
